@@ -1,0 +1,73 @@
+# Compiled object files
+*.o
+*.obj
+
+# Compiled binary files
+*.exe
+*.out
+*.app
+*.elf
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+*.so
+*.dll
+*.dylib
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Build directories
+build/
+Build/
+bin/
+debug/
+release/
+
+# IDE/editor directories and files
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln
+*.vcxproj*
+*.ncb
+*.opensdf
+*.sdf
+
+# MacOS files
+.DS_Store
+
+# Windows files
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.bak
+*.~*
+
+# Core dumps
+core
+core.*
+
+# Generated files
+*.map
+*.lst
+*.sym
+
+# Git files
+*.orig
+
+# Python (if you use any scripts/tools)
+__pycache__/
+*.pyc
+
