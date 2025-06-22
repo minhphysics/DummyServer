@@ -22,8 +22,8 @@ class Header
 {
 public:
 	MsgType	type;
-	std::string file_name;
 	uint16_t size; // size of message or file
+	std::string file_name;
 };
 
 class Socket

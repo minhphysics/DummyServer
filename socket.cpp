@@ -1,4 +1,4 @@
-#include "socket.h"
+#include "socket.hpp"
 #include <stdexcept>
 #include <iostream>
 #include <unistd.h>
@@ -13,288 +13,163 @@
 #include <netinet/in.h>
 #include <sstream>
 #include <arpa/inet.h>
-#include <sstream>
 
 Socket::Socket(const std::string& _ip, uint16_t _port, bool _verbose, bool _is_server)
- : ip_addr(_ip), port(_port), verbose(verbose), is_server(_is_server)
+ : ip_addr(_ip), port(_port), verbose(_verbose), is_server(_is_server)
 {
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (sockfd < 0)
 		throw std::runtime_error("socket creation failed");
-	else {
-		if (verbose)
-			std::cout << "Socket successfully created" << std::endl;
-	}
+	else if (verbose)
+		std::cout << "Socket successfully created" << std::endl;
 
 	serv_addr = new sockaddr_in;
-	memset(serv_addr, 0, sizeof(serv_addr));
+	memset(serv_addr, 0, sizeof(sockaddr_in));
 
-	// Assign IP address and port
 	serv_addr->sin_family = AF_INET;
-
-	if(ip_addr == "0.0.0.0")
-		serv_addr->sin_addr.s_addr = htonl(INADDR_ANY);
-	else
-		serv_addr->sin_addr.s_addr = inet_addr(ip_addr.c_str());
-
 	serv_addr->sin_port = htons(port);
+	if (ip_addr == "0.0.0.0")
+		serv_addr->sin_addr.s_addr = htonl(INADDR_ANY);
+	else if (inet_pton(AF_INET, ip_addr.c_str(), &(serv_addr->sin_addr)) <= 0)
+		throw std::runtime_error("Invalid IP address");
 
-	if(is_server)
-		serve();
-	else
-		request();
+	is_server ? serve() : request();
 }
 
 Socket::~Socket()
 {
-	close(sockfd);
-	if(serv_addr)
+	if (serv_addr)
 		delete serv_addr;
+	if (sockfd >= 0)
+		close(sockfd);
 }
 
-bool Socket::isVerbose()
-{
-	return verbose;
-}
-
-bool Socket::isServer()
-{
-	return is_server;
-}
+bool Socket::isVerbose() { return verbose; }
+bool Socket::isServer() { return is_server; }
 
 void Socket::serve()
 {
-	// Binding newly created socket to given IP
-	if (bind(sockfd, (struct sockaddr*)serv_addr, sizeof(sockaddr_in)) != 0)
+	if (bind(sockfd, (struct sockaddr*)serv_addr, sizeof(sockaddr_in)) < 0)
 		throw std::runtime_error("socket bind failed");
-	else {
-    		if(verbose)
-			std::cout << "socket successfully binded" << std::endl;
-	}
-	// listening to the assigned socket
-	listen(sockfd, 1);
+	if (verbose)
+		std::cout << "Socket successfully bound" << std::endl;
+
+	if (listen(sockfd, 1) < 0)
+		throw std::runtime_error("listen failed");
 }
+
 void Socket::request()
 {
-	if(connect(sockfd,(struct sockaddr*)serv_addr, sizeof(sockaddr_in)) < 0)
-		throw std::runtime_error("ERROR connecting");
-	else {
-		if(verbose)
-			std::cout << "connect to server successfully" << std::endl;
-	}
+	if (connect(sockfd, (struct sockaddr*)serv_addr, sizeof(sockaddr_in)) < 0)
+		throw std::runtime_error("connect failed");
+	if (verbose)
+		std::cout << "Connected to server successfully" << std::endl;
 
 	connfd = sockfd;
 }
 
-std::string composeHeader(Header &header)
+std::string Socket::composeHeader(Header& header)
 {
 	std::ostringstream oss;
-	std::string head;
+	oss << "fileType:" << (header.type == MsgType::TYPE_ATTACHMENT ? "attachment" : "message")
+		<< ",fileName:" << header.file_name
+		<< ",fileSize:" << std::to_string(header.size) << ";";
 
-	/* Compose header but 128 bytes maximum */
-	if (header.type == MsgType::TYPE_ATTACHMENT) {
-		oss << "fileType:attachment,fileName:" << header.file_name << ",fileSize:" << std::to_string(header.size) << ";";
-		head = oss.str();
-		head.resize(HEADER_SIZE);
-	} else {
-		oss << "fileType:message,fileName:null,fileSize:" << std::to_string(header.size) << ";";
-		head = oss.str();
-		head.resize(HEADER_SIZE);
-	}
-
+	std::string head = oss.str();
+	head.resize(HEADER_SIZE, ' ');
 	return head;
 }
 
 bool Socket::isServerAddressAvailable()
 {
-    /* If port or address is zero, it's likely not bound */
-    if (serv_addr->sin_port == 0 || serv_addr->sin_addr.s_addr == 0)
-        return false;
-
-    return true;
+	return serv_addr && serv_addr->sin_port != 0 && serv_addr->sin_addr.s_addr != 0;
 }
 
 int Socket::sendMessage(std::string& message)
 {
-	Header header;
-	std::string socket_stream;
-
-	if (!isServerAddressAvailable()) {
-		if (verbose)
-			std::cout << "unbound server address" << std::endl;
+	if (!isServerAddressAvailable() || message.size() > MAX_MESSAGE_SIZE)
 		return -1;
-	}
 
-	if (message.size() > MAX_MESSAGE_SIZE) {
-		if (verbose)
-			std::cout << "too long message" << std::endl;
-		return -1;
-	}
-	/* Compose message to send */
-	header.type = MsgType::TYPE_MESSAGE;
-	header.size = message.size();
-	//header.file_name = "0";
-	socket_stream = composeHeader(header) + message;
+	Header header{ MsgType::TYPE_MESSAGE, static_cast<uint16_t>(message.size()), "null" };
+	std::string socket_stream = composeHeader(header) + message;
 
 	if (is_server) {
-		// get the client socket
 		connfd = accept(sockfd, nullptr, nullptr);
-		if (connfd < 0) {
-			if (verbose)
-				std::cout << "cannot find any connected socket" << std::endl;
-			return -1;
-		}
-		// currenly only accept 1 client
-		send(connfd, (const char*)socket_stream.c_str(), socket_stream.size() + 1, 0);
-	} else {
-		send(connfd, (const char*)socket_stream.c_str(), socket_stream.size() + 1, 0);
+		if (connfd < 0) return -1;
 	}
-
-	return 0;
+	return send(connfd, socket_stream.c_str(), socket_stream.size(), 0);
 }
- 
+
 int Socket::sendFile(const std::string& path)
 {
-	Header header;
 	std::ifstream file(path, std::ios::binary);
-	std::filesystem::path p(path);
-	std::string socket_stream;
+	if (!file.is_open()) return -1;
 
-	if (!isServerAddressAvailable()) {
-		if (verbose)
-			std::cout << "unbound server address" << std::endl;
-		return -1;
-	}
-
-	if (!file.is_open()) {
-		std::cerr << "Failed to open file: " << path << std::endl;;
-	}
-
-
-	/* Read the content of file */
 	file.seekg(0, std::ios::end);
-	std::streamsize size = file.tellg();
+	size_t size = file.tellg();
+	if (size > MAX_FILE_SIZE) return -1;
 	file.seekg(0);
-	if (size > MAX_FILE_SIZE) {
-		if (verbose)
-			std::cout << "file too large" << std::endl;
-
-		file.close();
-		return -1;
-	}
 
 	std::string content(size, '\0');
 	file.read(&content[0], size);
+	file.close();
 
-	/* Init header */
-	header.type = MsgType::TYPE_ATTACHMENT;
-	header.size = (uint16_t)size;
-	header.file_name = p.filename();
-
-	socket_stream = composeHeader(header) + content;
+	Header header{ MsgType::TYPE_ATTACHMENT, static_cast<uint16_t>(size), std::filesystem::path(path).filename().string() };
+	std::string socket_stream = composeHeader(header) + content;
 
 	if (is_server) {
-		// get the client socket
 		connfd = accept(sockfd, nullptr, nullptr);
-		if (connfd < 0) {
-			if (verbose)
-				std::cout << "cannot find any connected socket" << std::endl;
-			file.close();
-			return -1;
-		}
-		// currenly only accept 1 client
-		send(connfd, (const char*)socket_stream.c_str(), socket_stream.size() + 1, 0);
-	} else {
-		send(connfd, (const char*)socket_stream.c_str(), socket_stream.size() + 1, 0);
+		if (connfd < 0) return -1;
 	}
-
-	file.close();
-	return 0;
+	return send(connfd, socket_stream.c_str(), socket_stream.size(), 0);
 }
 
-int Socket::receiveAll(std::string& path) {
+int Socket::receiveAll(std::string& path)
+{
 	Header header;
 	std::map<std::string, std::string> header_map;
-	char* buffer = new char[MAX_MESSAGE_SIZE];
-	std::string message;
+	std::vector<char> buffer(MAX_MESSAGE_SIZE);
 
 	if (is_server) {
-		//get the client socket
 		connfd = accept(sockfd, nullptr, nullptr);
-		if (connfd < 0) {
-			if (verbose)
-				std::cout << "cannot find any connected socket" << std::endl;
-			delete[] buffer;
-			return -1;
-		}
-		// currently only accept 1 client
-		recv(connfd, buffer, sizeof(buffer), 0);
-	} else {
-		recv(connfd, buffer, sizeof(buffer), 0);
+		if (connfd < 0) return -1;
 	}
+	ssize_t received = recv(connfd, buffer.data(), buffer.size(), 0);
+	if (received <= 0) return -1;
 
-	if (parseHeader(buffer, header_map)) {
-		if (verbose)
-			std::cout << "cannot parse header" << std::endl;
-		delete[] buffer;
-		return -1;
-	}
+	if (parseHeader(buffer.data(), header_map)) return -1;
 
-	char* msg_buf = buffer + HEADER_SIZE;
-	/* Fill header */
-	if (header_map["fileType"] == "message") {
-		header.type = MsgType::TYPE_MESSAGE;
-		header.size = static_cast<uint16_t>(std::stoi(header_map["fileSize"]));
-		std::string str(msg_buf);
-		message = str;
-	} else if (header_map["fileType"] == "attachment") {
-		header.type = MsgType::TYPE_ATTACHMENT;
-		header.size = static_cast<uint16_t>(std::stoi(header_map["fileSize"]));
-		header.file_name = header_map["fileName"];
-		/* Save file at path */
-		std::string fullPath = path + "/" + header.file_name;
-		std::ofstream outFile(fullPath, std::ios::out | std::ios::binary);
-		if (!outFile) {
-			std::cerr << "Failed to open file: " << fullPath << std::endl;
-    		}
+	char* msg_buf = buffer.data() + HEADER_SIZE;
+	header.type = (header_map["fileType"] == "message") ? MsgType::TYPE_MESSAGE : MsgType::TYPE_ATTACHMENT;
+	header.size = static_cast<uint16_t>(std::stoi(header_map["fileSize"]));
+	header.file_name = header_map["fileName"];
+
+	if (header.type == MsgType::TYPE_ATTACHMENT) {
+		std::ofstream outFile(path + "/" + header.file_name, std::ios::binary);
+		if (!outFile) return -1;
 		outFile.write(msg_buf, header.size);
-		outFile.close();
+	} else {
+		std::string message(msg_buf, header.size);
+		if (verbose) std::cout << "Message: " << message << std::endl;
 	}
-
-	delete[] buffer;
 	return 0;
 }
-/*
-std::string Socket::showConnection();
-int Socket::receiveFile(std::string path);
-int Socket::receive(std::string path);
-*/
+
 int Socket::parseHeader(char* buf, std::map<std::string, std::string>& map)
 {
+	if (!buf) return -1;
 	std::string str(buf, HEADER_SIZE);
-	std::stringstream ss(buf);
+	std::stringstream ss(str);
 	std::string pair;
-
-	if (!buf)
-		return -1;
 
 	while (std::getline(ss, pair, ',')) {
 		size_t colon = pair.find(':');
 		if (colon != std::string::npos) {
 			std::string key = pair.substr(0, colon);
 			std::string val = pair.substr(colon + 1);
-
-			/* Check the key */
-			if (key != "fileType" && key != "fileName" && key != "fileSize") {
-				if (verbose)
-					std::cout << "inaccurate header: " << key << std::endl;
-				return -1;
-			}
-			/* remove trailing semicolon if any */
-			if (!val.empty() && val.back() == ';')
-				val.pop_back();
+			if (!val.empty() && val.back() == ';') val.pop_back();
 			map[key] = val;
-        }
-    }
+		}
+	}
 	return 0;
 }
