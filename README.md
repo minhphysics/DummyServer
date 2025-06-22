@@ -97,4 +97,4 @@ client.sendFile("image.jpg");
 
 ## License
 
-This project is open-source and free to use under the MIT License.
+This project is open-source and free to use under the GPL-3.0 License.
